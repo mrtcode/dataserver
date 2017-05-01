@@ -1792,6 +1792,95 @@ class FileTests extends APITests {
 	}
 	
 	
+	public function testS3Registrator() {
+		API::userClear(self::$config['userID']);
+		
+		$contentType = "text/html";
+		$charset = "utf-8";
+		
+		$json = API::createAttachmentItem("imported_file", [
+			'contentType' => $contentType,
+			'charset' => $charset
+		], false, $this, 'jsonData');
+		$key = $json['key'];
+		$originalVersion = $json['version'];
+		
+		// File shouldn't exist
+		$response = API::userGet(
+			self::$config['userID'],
+			"items/$key/file"
+		);
+		$this->assert404($response);
+		
+		//
+		// Get upload authorization
+		//
+		
+		$hash = '00112233445566778899aabbccddeeff';
+		$mtime = 12345678;
+		$filename = 'test.jpg';
+		$size = 500;
+		
+		// Get authorization
+		$response = API::userPost(
+			self::$config['userID'],
+			"items/$key/file",
+			$this->implodeParams([
+				"md5" => $hash,
+				"mtime" => $mtime,
+				"filename" => $filename,
+				"filesize" => $size
+			]),
+			[
+				"Content-Type: application/x-www-form-urlencoded",
+				"If-None-Match: *"
+			]
+		);
+		
+		$this->assert200($response);
+		
+		$json = [
+			'Type' => 'Notification',
+			'TopicArn' => 'arn:aws:sns:us-east-1:123456789:s3-object-created-zoterotest:1',
+			'Message' => json_encode(
+				[
+					'Records' => [
+						0 => [
+							's3' => [
+								'object' => [
+									'key' => $hash
+								]
+							]
+						]
+					]
+				]
+			)
+		];
+		
+		$response = HTTP::post(
+			'http://a:b@172.13.0.1/sns',
+			json_encode($json)
+		);
+		$this->assert200($response);
+		
+		// Verify attachment item metadata
+		$response = API::userGet(
+			self::$config['userID'],
+			"items/$key"
+		);
+		$json = API::getJSONFromResponse($response)['data'];
+		
+		$this->assertEquals($hash, $json['md5']);
+		$this->assertEquals($filename, $json['filename']);
+		$this->assertEquals($mtime, $json['mtime']);
+		$this->assertEquals($contentType, $json['contentType']);
+		$this->assertEquals($charset, $json['charset']);
+		
+		// Make sure version has changed
+		$this->assertNotEquals($originalVersion, $json['version']);
+	}
+	
+	
 	private function implodeParams($params, $exclude=array()) {
 		$parts = array();
 		foreach ($params as $key => $val) {
